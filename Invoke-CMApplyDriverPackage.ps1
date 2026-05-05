@@ -214,6 +214,7 @@
     4.2.6 - (2025-11-28) - Improved logic when multiple driver packages are detected with different SystemSKU values by falling back to the most recently created package.
 			(2026-05-05) - Addressed VS Code 'PROBLEMS': unused variables | Out-Null, comparison nulls on left
  						 - Restored line feed for terminating error in Get-DeploymentType
+						 - Expanded $LogsDirectory from %_SMSTSLogPath% to first available of %OSDTargetSystemDrive%\Windows\Temp, %_SMSTSLogPath% or %Temp%
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -364,7 +365,7 @@ Process {
 			$LogsDirectory = Join-Path -Path $env:SystemRoot -ChildPath "Temp"
 		}
 		default {
-			$LogsDirectory = $Script:TSEnvironment.Value("_SMSTSLogPath")
+            $LogsDirectory = @(if ($null -ne $TSEnvironment) {@($(Join-Path -Path $TSEnvironment.Value("OSDTargetSystemDrive") -ChildPath "Windows\Temp" -ErrorAction SilentlyContinue),$TSEnvironment.Value("_SMSTSLogPath"),$env:Temp) | Where-Object {$_}} else {$env:Temp})[0]
 		}
 	}
 	
