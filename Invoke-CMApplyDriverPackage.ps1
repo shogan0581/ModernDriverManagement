@@ -216,6 +216,7 @@
  						 - Restored line feed for terminating error in Get-DeploymentType
 						 - Expanded $LogsDirectory from %_SMSTSLogPath% to first available of %OSDTargetSystemDrive%\Windows\Temp, %_SMSTSLogPath% or %Temp%
 						 - Normalized cmdlet calls and property assignments in Get-ComputerData function
+						 - Added JSON parsing of SystemSKU properties from Driver Package Descriptions
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -1378,6 +1379,12 @@ Process {
 		Write-CMLogEntry -Value " - Count of driver packages after filter processing: $($DriverPackagesCount)" -Severity 1
 		
 		foreach ($DriverPackageItem in $DriverPackages) {
+			# Parse SystemSKUs from json or string in Driver Package Description
+			$DriverPackageDescription = "$($DriverPackageItem.Description)".Trim()
+			$SKUString = $DriverPackageDescription.Split(":").Replace("(","").Replace(")","")[1]
+			$SKUObject = try {$DriverPackageDescription | ConvertFrom-Json} catch {}
+			$SKUProperty = @($SKUObject.PSObject.Properties.Name | Where-Object {$_ -match '(^Baseboard|^Platform|ID$|IDs$|SKU$|SKUs$)'})[0]
+			$SystemSKU = if ([string]::IsNullOrEmpty($SKUProperty)) {$SKUString} elseif ($SKUObject.$SKUProperty -is [PSCustomObject]) {@($SKUObject.$SKUProperty.PSObject.Properties.Name) -join ','} else {"$($SKUObject.$SKUProperty)"}
 			# Construct custom object to hold values for current driver package properties used for matching with current computer details
 			$DriverPackageDetails = [PSCustomObject]@{
 				PackageName = $DriverPackageItem.Name
@@ -1386,7 +1393,7 @@ Process {
 				DateCreated = $DriverPackageItem.SourceDate
 				Manufacturer = $DriverPackageItem.Manufacturer
 				Model = $null
-				SystemSKU = $DriverPackageItem.Description.Split(":").Replace("(", "").Replace(")", "")[1]
+				SystemSKU = $SystemSKU
 				OSName = $null
 				OSVersion = $null
 				Architecture = $null
