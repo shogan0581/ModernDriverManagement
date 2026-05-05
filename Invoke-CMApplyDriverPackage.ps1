@@ -213,6 +213,7 @@
 	4.2.5 - (2025-01-15) - Added support for Windows 11 25H2, added Support for NUC devices from Intel/ASUS w/ ByteSpeed manufacturer. Added basica matching for manufacturer not explicitly supported.
     4.2.6 - (2025-11-28) - Improved logic when multiple driver packages are detected with different SystemSKU values by falling back to the most recently created package.
 			(2026-05-05) - Addressed VS Code 'PROBLEMS': unused variables | Out-Null, comparison nulls on left
+ 						 - Restored line feed for terminating error in Get-DeploymentType
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -588,7 +589,8 @@ Process {
 				if (-not (Test-Path -Path $XMLPackageLogicFile)) {
 					Write-CMLogEntry -Value " - Failed to locate required 'DriverPackages.xml' logic file for XMLPackage deployment type, ensure it has been pre-downloaded in a Download Package Content step before running this script" -Severity 3
 					
-					# Throw terminating error					$PSCmdlet.ThrowTerminatingError((New-TerminatingErrorRecord))
+					# Throw terminating error
+					$PSCmdlet.ThrowTerminatingError((New-TerminatingErrorRecord))
 				}
 			}
 			default {
