@@ -215,6 +215,7 @@
 			(2026-05-05) - Addressed VS Code 'PROBLEMS': unused variables | Out-Null, comparison nulls on left
  						 - Restored line feed for terminating error in Get-DeploymentType
 						 - Expanded $LogsDirectory from %_SMSTSLogPath% to first available of %OSDTargetSystemDrive%\Windows\Temp, %_SMSTSLogPath% or %Temp%
+						 - Normalized cmdlet calls and property assignments in Get-ComputerData function
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -1153,76 +1154,76 @@ Process {
 		}
 		
 		# Gather computer details based upon specific computer manufacturer
-		$ComputerManufacturer = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Manufacturer).Trim()
+		$ComputerManufacturer = (Get-CimInstance -ClassName "Win32_ComputerSystem").Manufacturer.Trim()
 		switch -Wildcard ($ComputerManufacturer) {
 			"*Microsoft*" {
 				$ComputerDetails.Manufacturer = "Microsoft"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = Get-WmiObject -Namespace "root\wmi" -Class "MS_SystemInformation" | Select-Object -ExpandProperty SystemSKU
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").SystemSKU.Trim()
 			}
 			"*HP*" {
 				$ComputerDetails.Manufacturer = "HP"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace "root\WMI").BaseBoardProduct.Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 			}
 			"*Hewlett-Packard*" {
 				$ComputerDetails.Manufacturer = "HP"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace "root\WMI").BaseBoardProduct.Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 			}
 			"*Dell*" {
 				$ComputerDetails.Manufacturer = "Dell"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace "root\WMI").SystemSku.Trim()
-				[string]$OEMString = Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty OEMStringArray
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").SystemSku.Trim()
+				[string]$OEMString = Get-CimInstance -ClassName "Win32_ComputerSystem" | Select-Object -ExpandProperty OEMStringArray
 				$ComputerDetails.FallbackSKU = [regex]::Matches($OEMString, '\[\S*]')[0].Value.TrimStart("[").TrimEnd("]")
 			}
 			"*Lenovo*" {
 				$ComputerDetails.Manufacturer = "Lenovo"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystemProduct" | Select-Object -ExpandProperty Version).Trim()
-				$ComputerDetails.SystemSKU = ((Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).SubString(0, 4)).Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystemProduct").Version.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim().SubString(0,4)
 			}
 			"*Panasonic*" {
 				$ComputerDetails.Manufacturer = "Panasonic Corporation"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace "root\WMI").BaseBoardProduct.Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 			}
 			"*Viglen*" {
 				$ComputerDetails.Manufacturer = "Viglen"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-WmiObject -Class "Win32_BaseBoard" | Select-Object -ExpandProperty SKU).Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "Win32_BaseBoard").SKU.Trim()
 			}
 			"*AZW*" {
 				$ComputerDetails.Manufacturer = "AZW"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace root\WMI).BaseBoardProduct.Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 			}
 			"*Fujitsu*" {
 				$ComputerDetails.Manufacturer = "Fujitsu"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-WmiObject -Class "Win32_BaseBoard" | Select-Object -ExpandProperty SKU).Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "Win32_BaseBoard").SKU.Trim()
 			}
 			"*Getac*" {
 				$ComputerDetails.Manufacturer = "Getac"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
-				$ComputerDetails.SystemSKU = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace root\WMI).BaseBoardProduct.Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
+				$ComputerDetails.SystemSKU = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 			}
 			"*Intel*" {
 				$ComputerDetails.Manufacturer = "Intel"
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
 			}
 			"*ByteSpeed*" {
-				if ($(Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim() -like "*NUC*") {
+				if ($(Get-WmiObject -Class "Win32_ComputerSystem").Model.Trim() -like "*NUC*") {
 					$ComputerDetails.Manufacturer = "Intel"
-					$ComputerDetails.Model = (Get-CIMInstance -ClassName "MS_SystemInformation" -NameSpace root\WMI).BaseBoardProduct.Trim()
+					$ComputerDetails.Model = (Get-CimInstance -ClassName "MS_SystemInformation" -Namespace "root/WMI").BaseBoardProduct.Trim()
 				} else {
 					$ComputerDetails.Manufacturer = "ByteSpeed"
-					$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
+					$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem").Model.Trim()
 				}
 			}
 			Default {
-				$ComputerDetails.Manufacturer = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Manufacturer).Trim()
-				$ComputerDetails.Model = (Get-WmiObject -Class "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
+				$ComputerDetails.Manufacturer = (Get-CimInstance -ClassName "Win32_ComputerSystem" | Select-Object -ExpandProperty Manufacturer).Trim()
+				$ComputerDetails.Model = (Get-CimInstance -ClassName "Win32_ComputerSystem" | Select-Object -ExpandProperty Model).Trim()
 			}
 		}
 		
