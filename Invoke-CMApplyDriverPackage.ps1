@@ -215,6 +215,7 @@
 			(2026-05-06) - Added DateUpdated property to DriverPackageDetails objects
 						 - Added SortProperty parameter defaulted to DateCreated
 						 - Replaced DateCreated with $Script:SortProperty throughout script
+						 - Implemented asterisk option for TargetOSName and TargetOSVersion parameters
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -283,7 +284,7 @@ param(
 	[parameter(Mandatory = $true, ParameterSetName = "Debug")]
 	[parameter(Mandatory = $true, ParameterSetName = "XMLPackage")]
 	[ValidateNotNullOrEmpty()]
-	[ValidateSet("Windows 11", "Windows 10")]
+	[ValidateSet("Windows 11", "Windows 10", "*")]
 	[string]$TargetOSName,
 	
 	[parameter(Mandatory = $true, ParameterSetName = "BareMetal", HelpMessage = "Define the value that will be used as the target operating system version e.g. '2004'.")]
@@ -292,7 +293,7 @@ param(
 	[parameter(Mandatory = $true, ParameterSetName = "Debug")]
 	[parameter(Mandatory = $false, ParameterSetName = "XMLPackage")]
 	[ValidateNotNullOrEmpty()]
-	[ValidateSet("25H2","24H2","23H2","22H2", "21H2", "21H1", "20H2", "2004", "1909", "1903", "1809", "1803", "1709", "1703", "1607")]
+	[ValidateSet("25H2","24H2","23H2","22H2", "21H2", "21H1", "20H2", "2004", "1909", "1903", "1809", "1803", "1709", "1703", "1607", "*")]
 	[string]$TargetOSVersion,
 	
 	[parameter(Mandatory = $false, ParameterSetName = "BareMetal", HelpMessage = "Define the value that will be used as the target operating system architecture e.g. 'x64'.")]
@@ -966,7 +967,30 @@ Process {
 				}
 			}
 		}
-		
+
+		# If OS Name is * and Task Sequence exists then attempt to get OS Name from cached wim
+		if (($OSImageDetails.Name -eq "*") -and ($null -ne $TSEnvironment)) {
+			$OSDImagePackageId = $Script:TSEnvironment.Value("OSDImagePackageId")
+			Write-CMLogEntry -Value " - Successfully read OSDImagePackageId from TS environment: $($OSDImagePackageId)" -Severity 1
+
+			$SMSTSPackageCacheLocation = $Script:TSEnvironment.Value("_SMSTSPackageCacheLocation$OSDImagePackageId")
+			Write-CMLogEntry -Value " - Successfully read SMSTSPackageCacheLocation from TS environment: $($SMSTSPackageCacheLocation)" -Severity 1
+
+			$WimPath = @(Get-ChildItem -Path $SMSTSPackageCacheLocation -Filter "*.wim")[0].FullName
+			Write-CMLogEntry -Value " - Successfully determined Wim Path: $($WimPath)" -Severity 1
+
+			$WimOSNames = @(Get-WindowsImage -ImagePath $WimPath | ForEach-Object {$_.ImageName,$_.ImageDescription} | Where-Object {$_ -match "Windows \d+"} | ForEach-Object {@($_ -split "(Windows \d+)")[1]} | Sort-Object -Unique)
+			if ($WimOSNames.Count -eq 1) {
+				Write-CMLogEntry -Value " - Successfully determined operating system name from Wim: $($WimOSNames[0])" -Severity 1
+				Write-CMLogEntry -Value " - Replacing target operating system name of '*' with '$($WimOSNames[0])' from Wim" -Severity 1
+				$OSImageDetails.Name = $WimOSNames[0]
+			}
+			else {
+				Write-CMLogEntry -Value " - Indeterminate operating system name(s) from Wim: $($WimOSNames -join ", ")" -Severity 1
+				Write-CMLogEntry -Value " - Keeping target operating system name as '*'" -Severity 1
+			}
+		}
+
 		# Handle output to log file for OS image details
 		Write-CMLogEntry -Value " - Target operating system name configured as: $($OSImageDetails.Name)" -Severity 1
 		Write-CMLogEntry -Value " - Target operating system architecture configured as: $($OSImageDetails.Architecture)" -Severity 1
