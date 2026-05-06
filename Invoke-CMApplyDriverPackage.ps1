@@ -110,9 +110,9 @@
 	Author:      Nickolaj Andersen / Maurice Daly
     Contact:     @NickolajA / @MoDaly_IT
     Created:     2017-03-27
-    Updated:     2025-11-28
+    Updated:     2026-05-06
 	
-	Contributors: @CodyMathis123, @JamesMcwatty @EdenNelson
+	Contributors: @CodyMathis123, @JamesMcwatty, @EdenNelson, @shogan0581
     
     Version history:
     1.0.0 - (2017-03-27) - Script created
@@ -212,6 +212,9 @@
   	4.2.4 - (2025-01-15) - Added support for Windows 11 24H2
 	4.2.5 - (2025-01-15) - Added support for Windows 11 25H2, added Support for NUC devices from Intel/ASUS w/ ByteSpeed manufacturer. Added basica matching for manufacturer not explicitly supported.
     4.2.6 - (2025-11-28) - Improved logic when multiple driver packages are detected with different SystemSKU values by falling back to the most recently created package.
+			(2026-05-06) - Added DateUpdated property to DriverPackageDetails objects
+						 - Added SortProperty parameter defaulted to DateCreated
+						 - Replaced DateCreated with $Script:SortProperty throughout script
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -262,6 +265,16 @@ param(
 	[parameter(Mandatory = $false, ParameterSetName = "XMLPackage")]
 	[ValidateNotNullOrEmpty()]
 	[string]$Filter = "Drivers",
+
+	[parameter(Mandatory = $false, ParameterSetName = "BareMetal", HelpMessage = "Define the property that will be used to sort drivers when more than one match is found e.g. 'DateUpdated'.")]
+	[parameter(Mandatory = $false, ParameterSetName = "DriverUpdate")]
+	[parameter(Mandatory = $false, ParameterSetName = "OSUpgrade")]
+	[parameter(Mandatory = $false, ParameterSetName = "PreCache")]
+	[parameter(Mandatory = $false, ParameterSetName = "Debug")]
+	[parameter(Mandatory = $false, ParameterSetName = "XMLPackage")]
+	[ValidateNotNullOrEmpty()]
+	[ValidateSet("PackageID", "PackageVersion", "DateCreated", "DateUpdated", "Manufacturer", "Model", "SystemSKU", "OSName", "OSVersion", "Architecture")]
+	[string]$SortProperty = "DateCreated",
 
 	[parameter(Mandatory = $true, ParameterSetName = "BareMetal", HelpMessage = "Define the value that will be used as the target operating system name e.g. 'Windows 10'.")]
 	[parameter(Mandatory = $true, ParameterSetName = "DriverUpdate")]
@@ -1379,6 +1392,7 @@ Process {
 				PackageID = $DriverPackageItem.PackageID
 				PackageVersion = $DriverPackageItem.Version
 				DateCreated = $DriverPackageItem.SourceDate
+				DateUpdated = $DriverPackageItem.LastRefreshTime
 				Manufacturer = $DriverPackageItem.Manufacturer
 				Model = $null
 				SystemSKU = $DriverPackageItem.Description.Split(":").Replace("(", "").Replace(")", "")[1]
@@ -1482,6 +1496,7 @@ Process {
 								
 								# Match found for all critiera including OS version
 								Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Driver package was created on: $($DriverPackageDetails.DateCreated)" -Severity 1
+								Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Driver package was updated on: $($DriverPackageDetails.DateUpdated)" -Severity 1
 								Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Match found between driver package and computer for $($DetectionCounter)/$($DetectionMethodsCount) checks, adding to list for post-processing of matched driver packages" -Severity 1
 								
 								# Update the SystemSKU value for the custom driver package details object to account for multiple values from original driver package data
@@ -1499,6 +1514,7 @@ Process {
 						else {
 							# Match found for all critiera except for OS version, assuming here that the vendor does not provide OS version specific driver packages
 							Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Driver package was created on: $($DriverPackageDetails.DateCreated)" -Severity 1
+							Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Driver package was updated on: $($DriverPackageDetails.DateUpdated)" -Severity 1
 							Write-CMLogEntry -Value "[DriverPackage:$($DriverPackageItem.PackageID)]: Match found between driver package and computer, adding to list for post-processing of matched driver packages" -Severity 1
 							
 							# Update the SystemSKU value for the custom driver package details object to account for multiple values from original driver package data
@@ -1552,6 +1568,7 @@ Process {
 							PackageName = $DriverPackageItem.Name
 							PackageID = $DriverPackageItem.PackageID
 							DateCreated = $DriverPackageItem.SourceDate
+							DateUpdated = $DriverPackageItem.LastRefreshTime
 							Manufacturer = $DriverPackageItem.Manufacturer
 							OSName = $null
 							Architecture = $null
@@ -1586,6 +1603,7 @@ Process {
 								
 								# Match found for all critiera including OS version
 								Write-CMLogEntry -Value "[DriverPackageFallback:$($DriverPackageItem.PackageID)]: Fallback driver package was created on: $($DriverPackageDetails.DateCreated)" -Severity 1
+								Write-CMLogEntry -Value "[DriverPackageFallback:$($DriverPackageItem.PackageID)]: Fallback driver package was updated on: $($DriverPackageDetails.DateUpdated)" -Severity 1
 								Write-CMLogEntry -Value "[DriverPackageFallback:$($DriverPackageItem.PackageID)]: Match found for fallback driver package with $($DetectionCounter)/$($DetectionMethodsCount) checks, adding to list for post-processing of matched fallback driver packages" -Severity 1
 								
 								# Add custom driver package details object to list of fallback driver packages for post-processing
@@ -1845,8 +1863,8 @@ Process {
 					Confirm-DriverPackage -ComputerData $ComputerData -OSImageData $OSImageDetails -DriverPackage $DriverPackages -OSVersionFallback $true
 					
 					if ($DriverPackageList.Count -ge 1) {
-						# Sort driver packages descending based on OSVersion, DateCreated properties and select the most recently created one
-						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property OSVersion, DateCreated -Descending | Select-Object -First 1
+						# Sort driver packages descending based on OSVersion, $Script:SortProperty properties and select first object
+						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property OSVersion, $Script:SortProperty -Descending | Select-Object -First 1
 						
 						Write-CMLogEntry -Value " - Selected driver package '$($DriverPackageList[0].PackageID)' with name: $($DriverPackageList[0].PackageName)" -Severity 1
 						Write-CMLogEntry -Value " - Successfully completed validation after fallback process and detected a single driver package, script execution is allowed to continue" -Severity 1
@@ -1889,8 +1907,8 @@ Process {
 						Write-CMLogEntry -Value " - NOTICE: This is a supported scenario where the vendor use the same driver package for multiple models" -Severity 1
 						Write-CMLogEntry -Value " - NOTICE: Validation process will automatically choose the most recently created driver package, even if it means that the computer model names may not match" -Severity 1
 						
-						# Sort driver packages descending based on DateCreated property and select the most recently created one
-						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property DateCreated -Descending | Select-Object -First 1
+						# Sort driver packages descending based on $Script:SortProperty property and select first object
+						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property $Script:SortProperty -Descending | Select-Object -First 1
 						
 						Write-CMLogEntry -Value " - Selected driver package '$($DriverPackageList[0].PackageID)' with name: $($DriverPackageList[0].PackageName)" -Severity 1
 						Write-CMLogEntry -Value " - Successfully completed validation with multiple detected driver packages, script execution is allowed to continue" -Severity 1
@@ -1900,8 +1918,8 @@ Process {
 						Write-CMLogEntry -Value " - WARNING: Computer detection method is currently '$($ComputerDetectionMethod)', and multiple packages have been matched but with different SystemSKU values" -Severity 2
 						Write-CMLogEntry -Value " - WARNING: This is an unexpected scenario - falling back to using the most recently created driver package" -Severity 2
 						
-						# Sort driver packages descending based on DateCreated property and select the most recently created one
-						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property DateCreated -Descending | Select-Object -First 1
+						# Sort driver packages descending based on $Script:SortProperty property and select first object
+						$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property $Script:SortProperty -Descending | Select-Object -First 1
 						
 						Write-CMLogEntry -Value " - Selected driver package '$($DriverPackageList[0].PackageID)' with name: $($DriverPackageList[0].PackageName)" -Severity 1
 						Write-CMLogEntry -Value " - Successfully completed validation with multiple detected driver packages using fallback to latest match, script execution is allowed to continue" -Severity 1
@@ -1909,10 +1927,10 @@ Process {
 				}
 				else {
 					Write-CMLogEntry -Value " - NOTICE: Computer detection method is currently '$($ComputerDetectionMethod)', and multiple packages have been matched with the same Model value" -Severity 1
-					Write-CMLogEntry -Value " - NOTICE: Validation process will automatically choose the most recently created driver package by the DateCreated property" -Severity 1
+					Write-CMLogEntry -Value " - NOTICE: Validation process will automatically choose the first driver package sorted by $($Script:SortProperty) property" -Severity 1
 					
-					# Sort driver packages descending based on DateCreated property and select the most recently created one
-					$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property DateCreated -Descending | Select-Object -First 1
+					# Sort driver packages descending based on $Script:SortProperty property and select first object
+					$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property $Script:SortProperty -Descending | Select-Object -First 1
 					Write-CMLogEntry -Value " - Selected driver package '$($DriverPackageList[0].PackageID)' with name: $($DriverPackageList[0].PackageName)" -Severity 1
 				}
 			}
@@ -1935,10 +1953,10 @@ Process {
 				}
 				default {
 					Write-CMLogEntry -Value " - Amount of fallback driver packages detected by validation process: $($DriverPackageList.Count)" -Severity 1
-					Write-CMLogEntry -Value " - NOTICE: Multiple fallback driver packages have been matched, validation process will automatically choose the most recently created fallback driver package by the DateCreated property" -Severity 1
+					Write-CMLogEntry -Value " - NOTICE: Multiple fallback driver packages have been matched, validation process will automatically choose the fallback driver package sorted by $($Script:SortProperty) property" -Severity 1
 					
-					# Sort driver packages descending based on DateCreated property and select the most recently created one
-					$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property DateCreated -Descending | Select-Object -First 1
+					# Sort driver packages descending based on $Script:SortProperty property and select first object
+					$Script:DriverPackageList = $DriverPackageList | Sort-Object -Property $Script:SortProperty -Descending | Select-Object -First 1
 					Write-CMLogEntry -Value " - Selected fallback driver package '$($DriverPackageList[0].PackageID)' with name: $($DriverPackageList[0].PackageName)" -Severity 1
 				}
 			}
@@ -2271,7 +2289,7 @@ Process {
 		Write-CMLogEntry -Value "[DriverPackageValidation]: Starting driver package validation phase" -Severity 1
 		
 		# Validate that at least one driver package was matched against computer data
-		# Check if multiple driver packages were detected and ensure the most recent one by sorting after the DateCreated property from original AdminService call
+		# Check if multiple driver packages were detected and choose first package sorted by $Script:SortProperty property from original AdminService call
 		Confirm-DriverPackageList
 		
 		Write-CMLogEntry -Value "[DriverPackageValidation]: Completed driver package validation phase" -Severity 1
