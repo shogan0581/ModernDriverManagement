@@ -223,6 +223,7 @@
 						 - Implemented asterisk option for TargetOSName and TargetOSVersion parameters
 			(2026-05-11) - Added Microsoft.SMS.TSProgressUI initialization and implemented usage in Write-CMLogEntry
 						 - Updated decompression logic to facilitate variations in Driver Package content and utilize Expand-WindowsImage instead of Mount-WindowsImage
+			             - Added Hybrid DriverInstallMode to process variations in Driver Package content and provide TSProgressUI feedback
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -335,7 +336,7 @@ param(
 	[parameter(Mandatory = $false, ParameterSetName = "PreCache")]
 	[parameter(Mandatory = $false, ParameterSetName = "XMLPackage")]
 	[ValidateNotNullOrEmpty()]
-	[ValidateSet("Single", "Recurse")]
+	[ValidateSet("Single", "Recurse", "Hybrid")]
 	[string]$DriverInstallMode = "Recurse",
 	
 	[parameter(Mandatory = $false, ParameterSetName = "PreCache", HelpMessage = "Specify a custom path for the PreCache directory, overriding the default CCMCache directory.")]
@@ -2080,6 +2081,54 @@ Process {
 		}
 	}
 	
+	function Get-ManifestData([System.IO.FileInfo]$File) {
+		$SystemInformation = $(Get-CimInstance -Namespace 'root/wmi' -ClassName MS_SystemInformation -ErrorAction SilentlyContinue)
+		$Manufacturer = "$($SystemInformation.BaseBoardManufacturer)".Trim()
+		if ($Manufacturer -notmatch '^(Dell|HP|Hewlett-Packard)') {throw "Unsupported Manufacturer: '$($Manufacturer)'"}
+		$RawData = switch ($File.Extension) {'.json' {Get-Content $File | ConvertFrom-Json} '.xml' {[xml](Get-Content $File)}}
+		$Dictionary = [ordered]@{}
+		$CategoryReplacements = @(@('^Driver - ',''),@('.*(Keyboard|Mouse|Input).*','Input'),@('^(.*) - .*','$1'))
+		if ($null -ne $RawData.SoftPaqs) {
+			# HP json manifest
+			foreach ($SoftPaq in @($RawData.SoftPaqs)) {
+				$Object = [ordered]@{id=$null;Category=$null;Vendor=$null;Name=$null;Version=$null;}
+				$SoftPaq.PSObject.Properties| ForEach-Object {$Object."$($_.Name)" = $_.Value}
+				$CategoryReplacements | ForEach-Object {$Object.Category = $Object.Category -ireplace $_[0],$_[1]}
+				$Dictionary."$($Object.id)" = [PSCustomObject]$Object
+			}
+		} elseif (@($RawData.Objects.Object.Property.Name) -contains 'SoftPaqs') {
+			# HP xml manifest
+			foreach ($SoftPaq in @($($RawData.Objects.Object.Property | Where-Object {$_.Name -ieq 'SoftPaqs'}).Property)) {
+				$Object = [ordered]@{id=$null;Category=$null;Vendor=$null;Name=$null;Version=$null;}
+				$SoftPaq.Property | ForEach-Object {$Object."$($_.Name)" = $_.'#text'}
+				$CategoryReplacements | ForEach-Object {$Object.Category = $Object.Category -ireplace $_[0],$_[1]}
+				$Dictionary."$($Object.id)" = [PSCustomObject]$Object
+			}
+		} elseif ($null -ne $RawData.Catalog.System) {
+			# Dell xml manifest
+			$_potentialIDs  = @($SystemInformation.SystemSKU) # Dell
+			$_potentialIDs += @($SystemInformation.SystemSKU -split 'SKU=([0-9A-F]{4});')[1] # Dell
+			$_potentialIDs += $SystemInformation.BaseBoardProduct # HP
+			$_potentialIDs += $(try {$SystemInformation.SystemProductName.SubString(0,4)} catch {}) # Lenovo
+			$SystemID = @($_potentialIDs | Where-Object {$_ -match '^[0-9A-F]{4}$'} | ForEach-Object {$_.ToUpper()})[0]
+			# Get first matching SystemID
+			$System = @($RawData.Catalog.System | Where-Object {$_.SystemID -eq $SystemID})[0]
+			# Default to first System
+			if ($null -eq $System) {$System = @($RawData.Catalog.System)[0]}
+			foreach ($Release in @($System.OS.Release)) {
+				$Object = [ordered]@{id=$null;Category=$null;Vendor=$null;Name=$null;Version=$null;}
+				$Release.Attributes.Name | ForEach-Object {$Object."$_" = $Release.$_}
+				$Object.id = $Object.ReleaseID
+				$Object.Category = (Get-Culture).TextInfo.ToTitleCase($Object.Category)
+				$Object.Vendor = @($Object.DeviceDescription -split '\s')[0]
+				$Object.Name = $Object.DeviceDescription
+				$Object.Version = $Object.VendorVersion
+				$Dictionary."$($Object.id)" = [PSCustomObject]$Object
+			}
+		}
+		return $Dictionary
+	}
+	
 	function Install-DriverPackageContent {
 		param (
 			[parameter(Mandatory = $true, HelpMessage = "Specify the full local path to the downloaded driver package content.")]
@@ -2159,17 +2208,16 @@ Process {
 				Write-CMLogEntry -Value " - Attempting to apply drivers using dism.exe located in: $($ContentLocation)" -Severity 1
 				
 				# Determine driver injection method from parameter input
+				Write-CMLogEntry -Value " - DriverInstallMode is currently set to: $($DriverInstallMode)" -Severity 1
 				switch ($DriverInstallMode) {
 					"Single" {
 						try {
-							Write-CMLogEntry -Value " - DriverInstallMode is currently set to: $($DriverInstallMode)" -Severity 1
-							
 							# Get driver full path and install each driver seperately
 							$DriverINFs = Get-ChildItem -Path $ContentLocation -Recurse -Filter "*.inf" -ErrorAction Stop | Select-Object -Property FullName, Name
 							if (-not([string]::IsNullOrEmpty($DriverINFs))) {
 								foreach ($DriverINF in $DriverINFs) {
 									# Install specific driver
-									Write-CMLogEntry -Value " - Attempting to install driver: $($DriverINF.FullName)" -Severity 1
+									Write-CMLogEntry -Value " - Attempting to install: $($DriverINF.FullName)" -Severity 1
 									$ApplyDriverInvocation = Invoke-Executable -FilePath "dism.exe" -Arguments "/Image:$($TSEnvironment.Value('OSDTargetSystemDrive'))\ /Add-Driver /Driver:`"$($DriverINF.FullName)`""
 									
 									# Validate driver injection
@@ -2182,7 +2230,7 @@ Process {
 								}
 							}
 							else {
-								Write-CMLogEntry -Value " - An error occurred while enumerating driver paths, downloaded driver package does not contain any INF files" -Severity 3
+								Write-CMLogEntry -Value " - Downloaded driver package does not contain any INF files" -Severity 3
 								
 								# Throw terminating error								
 								$PSCmdlet.ThrowTerminatingError((New-TerminatingErrorRecord))
@@ -2196,9 +2244,8 @@ Process {
 						}
 					}
 					"Recurse" {
-						Write-CMLogEntry -Value " - DriverInstallMode is currently set to: $($DriverInstallMode)" -Severity 1
-						
 						# Apply drivers recursively
+						Write-CMLogEntry -Value " - Attempting to install: $($ContentLocation)\*" -Severity 1
 						$ApplyDriverInvocation = Invoke-Executable -FilePath "dism.exe" -Arguments "/Image:$($TSEnvironment.Value('OSDTargetSystemDrive'))\ /Add-Driver /Driver:$($ContentLocation) /Recurse"
 						
 						# Validate driver injection
@@ -2209,6 +2256,120 @@ Process {
 							Write-CMLogEntry -Value " - An error occurred while installing drivers. Continuing with warning code: $($ApplyDriverInvocation). See DISM.log for more details" -Severity 2
 						}
 					}
+                    "Hybrid" {
+                        # Import first manifest.json or manifest.xml under ContentLocation
+						$ManifestPath = @(Get-ChildItem -Path $ContentLocation -Filter "manifest.*" -File -Recurse -ErrorAction SilentlyContinue | Where-Object {@('.json','.xml') -contains $_.Extension} | Sort-Object Extension)[0].FullName
+						$ManifestData = Get-ManifestData -File $ManifestPath
+                        if ($null -ne $ManifestData) {
+							Write-CMLogEntry -Value " - Discovered $($ManifestData.Keys.Count) Drivers in $($ManifestPath)" -Severity 1
+                        } else {
+                            Write-CMLogEntry -Value " - ManifestPath : $(if (Test-Path $ManifestPath) {$ManifestPath} else {'$false'})" -Severity 1
+                        }
+
+						# Set RootDriverDirectoryPath to path of last single-child directory under ContentLocation
+                        $RootDriverDirectoryPath = $ContentLocation
+                        while (@(Get-ChildItem -Path $RootDriverDirectoryPath -Directory).Count -eq 1) {
+							$RootDriverDirectoryPath = Join-Path -Path $RootDriverDirectoryPath -ChildPath @(Get-ChildItem -Path $RootDriverDirectoryPath)[0].Name
+						}
+                        Write-CMLogEntry -Value " - Root Driver Directory Path: $($RootDriverDirectoryPath)" -Severity 1
+
+                        # Get Driver Directory Paths to run dism against
+                        $DriverDirectoryPaths = @()
+                        if (@(Get-ChildItem -Path $RootDriverDirectoryPath | Where-Object {$_.Name -match "^(Audio|Chipset|Graphics|Network|readme\.txt)$"}).Count -eq 5) {
+                            # Assume an HP SoftPaq directory structure when Audio, Chipset, Graphics, Network and readme.txt all exist
+                            $DriverDirectoryPaths = @(Get-ChildItem -Path $RootDriverDirectoryPath -Directory | ForEach-Object {Get-ChildItem -Path $($_.FullName) -Directory | ForEach-Object {Get-ChildItem -Path $($_.FullName) -Directory | ForEach-Object {$_.FullName}}})
+                            Write-CMLogEntry -Value " - HP SoftPaq Directory Structure Detected" -Severity 1
+                        }
+                        elseif (@(Get-ChildItem -Path $RootDriverDirectoryPath | Where-Object {$_.Name -match "^(\d+|sp\d+|manifest.json|manifest.xml)$"}).Count -eq @(Get-ChildItem -Path $RootDriverDirectoryPath).Count) {
+                            # Assume a New-HPDriverPack or New-HPBuildDriverPack directory structure when only sp*, manifest.json & manifest.xml exist
+                            $DriverDirectoryPaths = @(Get-ChildItem -Path $RootDriverDirectoryPath -Directory | ForEach-Object {$_.FullName})
+                            Write-CMLogEntry -Value " - New-HPDriverPack or New-HPBuildDriverPack Directory Structure Detected" -Severity 1
+                        }
+                        elseif (($ManifestPath) -and (@(Get-ChildItem -Path $RootDriverDirectoryPath -Directory).Count -eq @(Get-ChildItem -Path $RootDriverDirectoryPath).Count)) {
+                            # Assume a Dell directory structure when only directories exist
+                            $DriverDirectoryPaths = @(Get-ChildItem -Path $RootDriverDirectoryPath -Directory | ForEach-Object {Get-ChildItem -Path $($_.FullName) -Directory | ForEach-Object {$_.FullName}})
+                            Write-CMLogEntry -Value " - Dell Directory Structure Detected" -Severity 1
+                        }
+                        else {
+                            # Default to getting highest level directories containing *.inf files
+                            $InfDirectoryPaths = @(Get-ChildItem -Path $RootDriverDirectoryPath -Filter "*.inf" -Recurse -File | ForEach-Object {$_.DirectoryName} | Sort-Object -Unique)
+							if ($InfDirectoryPaths.Count -le 0) {
+								Write-CMLogEntry -Value " - Unable to determine Inf Directory Paths" -Severity 2
+							} else {
+								$DriverDirectoryPaths = @($InfDirectoryPaths | Where-Object {$_Directory=$_;!($InfDirectoryPaths | Where-Object {$_Directory.StartsWith("$_\")})})
+								if ($DriverDirectoryPaths.Count -gt 0) {
+									Write-CMLogEntry -Value " - Discovered $($DriverDirectoryPaths.Count) Driver Directory Paths" -Severity 1
+								} else {
+									Write-CMLogEntry -Value " - Unable to determine Driver Directory Paths from the following Inf Directory Paths" -Severity 2
+									$InfDirectoryPaths | ForEach-Object {
+										Write-CMLogEntry -Value " - $_ : $(@(Get-ChildItem $_ -Force).Name -join ',')" -Severity 2
+									}
+								}
+							}
+                        }
+                        # Fallback to Root Driver Directory Path if nothing found above
+                        if ($DriverDirectoryPaths.Count -eq 0) {$DriverDirectoryPaths = @($RootDriverDirectoryPath)}
+
+                        # Record intial hivelist for dism cooldown loop
+                        $HivelistPath = "HKLM:\System\CurrentControlSet\Control\hivelist"
+                        $InitialHives = @($(Get-Item -Path $HivelistPath).Property -replace "^\\Registry\\","")
+
+                        # Build PSCustomObjects from DriverDirectoryPaths and ManifestData
+						$DriverDirectories = @()
+						foreach ($DirectoryPath in $DriverDirectoryPaths) {
+							$DirectoryLeaf = $(Split-Path $DirectoryPath -Leaf)
+                            $DriverDirectories += [PSCustomObject]@{
+								Id       = $null
+								Category = $null
+								Vendor   = $null
+								Name     = $null
+								Version  = $null
+								Output   = $null
+								Path     = $DirectoryPath
+								ShortenedPath = $($DirectoryPath -replace "$([regex]::Escape($RootDriverDirectoryPath))\\",".\")
+								Leaf     = $DirectoryLeaf
+							}
+                            if ($ManifestData.$DirectoryLeaf) {
+                                @("Id","Category","Vendor","Name","Version") | ForEach-Object {$DriverDirectories[-1].$_ = $ManifestData.$DirectoryLeaf.$_}
+                                $DriverDirectories[-1].Output = " - Applying {0} {1} Driver : {2} {3}" -f $DriverDirectories[-1].Id,$DriverDirectories[-1].Category,$DriverDirectories[-1].Name,$DriverDirectories[-1].Version
+                            } else {
+                                $DriverDirectories[-1].Output = " - Applying drivers from: {0}\*" -f $DriverDirectories[-1].ShortenedPath
+                            }
+                            Write-CMLogEntry -Value " - [DriverDirectory] : $($DriverDirectories[-1] | ConvertTo-Json -Compress)" -Severity 1
+                        }
+
+                        # Loop through Driver Directory PSCustomObjects...
+                        $Script:ActionExecStep = 0
+                        $Script:ActionExecMaxStep = $DriverDirectories.Count * 2
+                        foreach ($Directory in @($DriverDirectories | Sort-Object Category,Vendor,id,Path)) {
+                            # Install drivers from a specific directory
+                            Write-CMLogEntry -Value "$($Directory.Output)" -Severity 1
+                            $ApplyDriverInvocation = Invoke-Executable -FilePath "dism.exe" -Arguments "/Image:$($TSEnvironment.Value('OSDTargetSystemDrive'))\ /Add-Driver /Driver:`"$($Directory.Path)`" /Recurse"
+
+                            # Validate driver injection
+                            if ($ApplyDriverInvocation -eq 0) {
+                                Write-CMLogEntry -Value " - Successfully applied drivers recursively from $($Directory.ShortenedPath) using dism.exe" -Severity 1
+                            }
+                            else {
+                                Write-CMLogEntry -Value " - An error occurred while adding drivers. Continuing with warning code: $($ApplyDriverInvocation). See DISM.log for more details" -Severity 2
+                            }
+
+                            # Short cool-down loop to give hivelist time to reset before next dism call
+                            foreach ($Exponent in @(0..3)) {
+                                $CurrentHives = @($(Get-Item -Path $HivelistPath).Property -replace "^\\Registry\\","")
+                                if ($($CurrentHives -join "|") -ne $($InitialHives -join "|")) {
+                                    $LingeringHives = @($CurrentHives | Where-Object {$InitialHives -notcontains $_})
+                                    if ($LingeringHives.Count -gt 0) {
+                                        $Script:ActionExecStep += -3
+                                        Write-CMLogEntry -Value " - Intial hives: '$($InitialHives -join "|")'" -Severity 2
+                                        Write-CMLogEntry -Value " - Current hives: '$($CurrentHives -join "|")'" -Severity 2
+                                        Write-CMLogEntry -Value " - Lingering hives: '$($LingeringHives -join "|")'" -Severity 2
+                                        Start-Sleep -Milliseconds $([Math]::Pow(2,$Exponent)*100)
+                                    }
+                                }
+                            }
+                        }
+                    }
 				}
 			}
 			"OSUpgrade" {
