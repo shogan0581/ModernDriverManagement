@@ -110,9 +110,9 @@
 	Author:      Nickolaj Andersen / Maurice Daly
     Contact:     @NickolajA / @MoDaly_IT
     Created:     2017-03-27
-    Updated:     2025-11-28
+    Updated:     2026-05-11
 	
-	Contributors: @CodyMathis123, @JamesMcwatty @EdenNelson
+	Contributors: @CodyMathis123, @JamesMcwatty, @EdenNelson, @shogan0581
     
     Version history:
     1.0.0 - (2017-03-27) - Script created
@@ -212,6 +212,7 @@
   	4.2.4 - (2025-01-15) - Added support for Windows 11 24H2
 	4.2.5 - (2025-01-15) - Added support for Windows 11 25H2, added Support for NUC devices from Intel/ASUS w/ ByteSpeed manufacturer. Added basica matching for manufacturer not explicitly supported.
     4.2.6 - (2025-11-28) - Improved logic when multiple driver packages are detected with different SystemSKU values by falling back to the most recently created package.
+			(2026-05-11) - Added Microsoft.SMS.TSProgressUI initialization and implemented usage in Write-CMLogEntry
 #>
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = "BareMetal")]
 param(
@@ -351,6 +352,25 @@ Begin {
 			Write-Warning -Message "Unable to construct Microsoft.SMS.TSEnvironment object"; exit
 		}
 	}
+
+	# Load Microsoft.SMS.TSProgressUI COM object
+    if (($PSCmdLet.ParameterSetName -notlike "Debug") -and ($null -ne $TSEnvironment)) {
+        try {
+            $TSProgressUI = New-Object -ComObject Microsoft.SMS.TSProgressUI -ErrorAction Stop
+            $OrgName = $TSEnvironment.Value("_SMSTSOrgName")
+            $PackageName = $TSEnvironment.Value("_SMSTSPackageName")
+            $CustomProgressDialogMessage = $TSEnvironment.Value("_SMSTSCustomProgressDialogMessage")
+            $CurrentActionName = $TSEnvironment.Value("_SMSTSCurrentActionName")
+            $NextInstructionPointer = $TSEnvironment.Value("_SMSTSNextInstructionPointer")
+            $InstructionTableSize = $TSEnvironment.Value("_SMSTSInstructionTableSize")
+            $ActionExecStep = 0
+            $ActionExecMaxStep = 80
+            $TSProgressUI.ShowActionProgress($OrgName,$PackageName,$CustomProgressDialogMessage,$CurrentActionName,$NextInstructionPointer,$InstructionTableSize,"Initializing...",$ActionExecStep,$ActionExecMaxStep) | Out-Null
+        }
+        catch [System.Exception] {
+            Write-Warning -Message "Unable to construct Microsoft.SMS.TSProgressUI object"; exit 1
+        }
+    }
 	
 	# Enable TLS 1.2 support for downloading modules from PSGallery
 	[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -382,6 +402,13 @@ Process {
 			[ValidateNotNullOrEmpty()]
 			[string]$FileName = "ApplyDriverPackage.log"
 		)
+        # TSProgressUI Output
+        if ($null -ne $Script:TSProgressUI) {
+            $ActionExecInfo = $($Value -replace "^([\s\-]+|\[[^\]]*\]\W*)","")
+            $Script:ActionExecStep = @(@(1,$($Script:ActionExecStep + 1)) | Where-Object {$_ -lt $Script:ActionExecMaxStep})[-1]
+            $Script:TSProgressUI.ShowActionProgress($Script:OrgName,$Script:PackageName,$Script:CustomProgressDialogMessage,$Script:CurrentActionName,$Script:NextInstructionPointer,$Script:InstructionTableSize,$ActionExecInfo,$Script:ActionExecStep,$Script:ActionExecMaxStep) | Out-Null
+        }
+
 		# Determine log file location
 		$LogFilePath = Join-Path -Path $LogsDirectory -ChildPath $FileName
 		
